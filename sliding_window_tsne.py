@@ -101,7 +101,7 @@ def pca_torch(X, no_dims=64):
 
 
 # init_method: 0: pca, 1: random, 2: prev_epoch
-def tsne(X, window_size=5000, jump_size=1000, prev_feat=None, no_dims=64, perplexity=30.0, init_method="pca", max_iter=1000, initial_momentum=0.5, final_momentum=0.8, eta=500, min_gain=0.01, tol=1e-5, initial_iter=20, early_exag=100, exag_factor=4.):
+def tsne(X, window_size=5000, jump_size=1500, prev_feat=None, no_dims=64, perplexity=30.0, init_method="pca", max_iter=1000, initial_momentum=0.5, final_momentum=0.8, eta=500, min_gain=0.01, tol=1e-5, initial_iter=20, early_exag=100, exag_factor=4.):
     """
         Runs t-SNE on the dataset in the NxD array X to reduce its
         dimensionality to no_dims dimensions. The syntaxis of the function is
@@ -123,6 +123,7 @@ def tsne(X, window_size=5000, jump_size=1000, prev_feat=None, no_dims=64, perple
             #Y[new_idx - 1:] = pca_torch(X[new_idx-1:], no_dims)
             Y = pca_torch(X, no_dims)
         Y[:min(window_size - jump_size + 1, len(X))] = prev_feat[jump_size:]
+        print(f"load: {window_size-jump_size +1}")
 
 
     (n, d) = X.shape
@@ -193,7 +194,7 @@ def get_window_idx(window_size, jump_size, cur_window_idx):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", type=str, default="wiki40b_30k_reps.dat", help="file name of feature stored")
+    parser.add_argument("--data", type=str, default="../data/wiki40b_30k_reps.dat", help="file name of feature stored")
     parser.add_argument("--cuda", type=int, default=1, help="if use cuda accelarate")
 
     parser.add_argument("--input_dim", type=int, default=128, help="input dimension")
@@ -209,7 +210,7 @@ if __name__ == "__main__":
     parser.add_argument("--init_method", type=str, default="pca", help="pca / random initialization of reduced embedding")
 
     parser.add_argument("--window_size", type=int, default=5000, help="window size for each tsne computation")
-    parser.add_argument("--jump_size", type=int, default=1000, help="(window - overlap size) for each tsne computation")
+    parser.add_argument("--jump_size", type=int, default=1500, help="(window - overlap size) for each tsne computation")
     parser.add_argument("--perplexity", type=float, default=30.0, help="perplexity")
 
 
@@ -230,10 +231,13 @@ if __name__ == "__main__":
 
     # for test-use only
     #X = torch.randn((1800, 128))
+    #opt.n = 1800
+    assert(X.shape[0] == opt.n)
     print(X.shape)
 
     Y = torch.Tensor()
     b_s = (N - window_size) // jump_size + 2
+    #b_s = 2
     print(f"Batches to run: {b_s}")
     cur_Y = None
 
@@ -241,10 +245,13 @@ if __name__ == "__main__":
         for batch_idx in tqdm(range(b_s), total=b_s, position=0, leave=True):
             start = batch_idx * jump_size
             end = min(start + window_size, opt.n)
-            cur_Y = tsne(X[start:end], window_size, jump_size, prev_feat=cur_Y)
+            print(start, end)
+
+            cur_Y = tsne(X[start:end], window_size=min(window_size, end-start), jump_size=jump_size, prev_feat=cur_Y)
             Y = torch.cat((Y, cur_Y))
             if end == opt.n: break
 
+    print(Y.shape)
     path = f"ws_{window_size}_js_{jump_size}_init_{opt.init_method}"
     # save output
     torch.save(Y, f"{path}.pt")
