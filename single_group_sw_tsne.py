@@ -101,7 +101,7 @@ def pca_torch(X, no_dims=64):
 
 
 # init_method: 0: pca, 1: random, 2: prev_epoch
-def tsne(X, Q, window_size=5000, jump_size=1500, prev_feat=None, no_dims=64, perplexity=30.0, init_method="pca", max_iter=1000, initial_momentum=0.5, final_momentum=0.8, eta=500, min_gain=0.01, tol=1e-5, initial_iter=20, early_exag=100, exag_factor=4.):
+def tsne(X, window_size=5000, jump_size=1500, prev_feat=None, no_dims=64, perplexity=30.0, init_method="pca", max_iter=1000, initial_momentum=0.5, final_momentum=0.8, eta=500, min_gain=0.01, tol=1e-5, initial_iter=10, early_exag=50, exag_factor=4.):
     """
         Runs t-SNE on the dataset in the NxD array X to reduce its
         dimensionality to no_dims dimensions. The syntaxis of the function is
@@ -143,7 +143,7 @@ def tsne(X, Q, window_size=5000, jump_size=1500, prev_feat=None, no_dims=64, per
 
     # Run iterations
     prev_loss = 1000000
-    max_iter = 100
+    max_iter = 200
     for iter in tqdm(range(max_iter), total=max_iter, position=0, leave=True):
 
         # Compute pairwise affinities
@@ -186,7 +186,7 @@ def tsne(X, Q, window_size=5000, jump_size=1500, prev_feat=None, no_dims=64, per
         #if prev_loss - cur_loss < 1e-5:
             #break
         # Compute current value of cost function
-        if iter % 10 == 0:
+        if iter % 50 == 0:
             print(f"iteration {iter}, error {cur_loss}, dis {prev_loss - cur_loss}")
 
         prev_loss = cur_loss
@@ -204,7 +204,7 @@ def get_window_idx(window_size, jump_size, cur_window_idx):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default="../data/wiki40b_30k_reps.dat", help="file name of wiki representation stored")
-    parser.add_argument("--questions", type=str, default="../data/q_20_reps.npy", help="file name of question representation")
+    #parser.add_argument("--questions", type=str, default="../data/q_20_reps.npy", help="file name of question representation")
     parser.add_argument("--cuda", type=int, default=1, help="if use cuda accelarate")
 
     parser.add_argument("--input_dim", type=int, default=128, help="input dimension")
@@ -234,14 +234,16 @@ if __name__ == "__main__":
 
 
 
-    #X = np.memmap(opt.data, dtype='float32', mode='r', shape=(opt.n, opt.input_dim))
+    X = np.memmap(opt.data, dtype='float32', mode='r', shape=(opt.n, opt.input_dim))
     # @TODO, no sure if this tensor is too large? Probably we need to use CPU first
-    #X = torch.Tensor(X)
-    X = torch.randn([29727, 128])
+    X = torch.Tensor(X)
+    #X = torch.randn([29727, 128])
+    '''
     with open (opt.questions, "rb") as f:
         Q = np.load(f)
     Q = torch.tensor(Q)
     assert(X.shape[1] == Q.shape[1])
+    '''
 
 
     # for test-use only
