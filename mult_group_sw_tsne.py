@@ -87,21 +87,22 @@ def x2p_torch(X, tol=1e-5, perplexity=30.0):
 def pca_torch(X, no_dims=64):
     print("Preprocessing the data using PCA...")
     (n, d) = X.shape
-    X = X - torch.mean(X, 0)
+    Z = X - torch.mean(X, 0)
 
-    (l, M) = torch.eig(torch.mm(X.t(), X), True)
+    (l, M) = torch.eig(torch.mm(Z.t(), Z), True)
     # split M real
     for i in range(d):
         if l[i, 1] != 0:
             M[:, i+1] = M[:, i]
             i += 1
 
-    Y = torch.mm(X, M[:, 0:no_dims])
+    Y = torch.mm(Z, M[:, 0:no_dims])
     return Y
 
 
 # init_method: 0: pca, 1: random, 2: prev_epoch
-def tsne(X, Q, window_size=5000, jump_size=1500, prev_feat=None, no_dims=64, perplexity=30.0, init_method="pca", max_iter=1000, initial_momentum=0.5, final_momentum=0.8, eta=500, min_gain=0.01, tol=1e-5, initial_iter=20, early_exag=100, exag_factor=4.):
+# fuse_prob: likelihood of fusing question representation
+def tsne(docs, ques, q_len=20, q_prev_feat=None, q_fuse_prob=1.0, window_size=5000, jump_size=1500, prev_feat=None, no_dims=64, perplexity=30.0, init_method="pca", max_iter=500, initial_momentum=0.5, final_momentum=0.8, eta=500, min_gain=0.01, tol=1e-5, initial_iter=10, early_exag=50, exag_factor=4.):
     """
         Runs t-SNE on the dataset in the NxD array X to reduce its
         dimensionality to no_dims dimensions. The syntaxis of the function is
@@ -109,25 +110,52 @@ def tsne(X, Q, window_size=5000, jump_size=1500, prev_feat=None, no_dims=64, per
     """
 
     # Initialize variables
-    assert(X.shape[0] == window_size)
+    # X should contains questions on top, then actual docs
+    assert(docs.shape[0] == window_size)
+    assert(ques.shape[0] == q_len)
+
+    # fuse stands for whether we incorporate question representation 
+    fuse = (torch.randn([1]).item() <= q_fuse_prob)
+    # if we only look at the wiki documents
+    if fuse:
+        X = torch.cat(ques, docs)
+        assert(X.shape[0] == window_size + q_len)
+    else:
+        X =  docs
+        assert(X.shape[0] == window_size)
+
+
+    # Y for concatenated ques|docs out, (q_len +win_size, dim)
     if prev_feat is None:
         if init_method == "pca":
-            Y = pca_torch(X, no_dims)
+            Y = pca_torch(X, no_dims) 
+            if fuse:
+                Y[:q_len] = q_prev_feat
+                assert(Y.shape[0] == q_len + window_size)
         elif init_method == "rand":
             Y = torch.randn(window_size, no_dims)
+            if fuse:
+                Y = Y.cat(q_prev_feat, Y)
+                assert(Y.shape[0] == q_len + window_size)
+
     else:
-        #@TODO probably need another hyper-parameter here decide how much we take from previous
-        Y = torch.randn(window_size, no_dims)
         new_idx = min(window_size - jump_size, len(X))
-        print(new_idx)
         if init_method == "pca":
-            # @TODO: which one more reasonable
-            #Y[new_idx - 1:] = pca_torch(X[new_idx-1:], no_dims)
             Y = pca_torch(X, no_dims)
-        Y[:new_idx] = prev_feat[jump_size: jump_size+new_idx]
+            if fuse:
+                Y[:q_len] = q_prev_feat
+                assert(Y.shape[0] == q_len + window_size)
+        else:
+            Y = torch.randn(window_size, no_dims)
+            if fuse: 
+                Y = Y.cat(q_prev_feat,Y)
+
 
 
     (n, d) = X.shape
+    assert(n == Y.shape[0])
+    assert(d == Y.shape[1])
+
     dY = torch.zeros(n, no_dims)
     iY = torch.zeros(n, no_dims)
     gains = torch.ones(n, no_dims)
@@ -143,9 +171,7 @@ def tsne(X, Q, window_size=5000, jump_size=1500, prev_feat=None, no_dims=64, per
 
     # Run iterations
     prev_loss = 1000000
-    max_iter = 100
     for iter in tqdm(range(max_iter), total=max_iter, position=0, leave=True):
-
         # Compute pairwise affinities
         sum_Y = torch.sum(Y*Y, 1)
         num = -2. * torch.mm(Y, Y.t())
@@ -186,7 +212,7 @@ def tsne(X, Q, window_size=5000, jump_size=1500, prev_feat=None, no_dims=64, per
         #if prev_loss - cur_loss < 1e-5:
             #break
         # Compute current value of cost function
-        if iter % 10 == 0:
+        if iter % 50 == 0:
             print(f"iteration {iter}, error {cur_loss}, dis {prev_loss - cur_loss}")
 
         prev_loss = cur_loss
@@ -195,37 +221,39 @@ def tsne(X, Q, window_size=5000, jump_size=1500, prev_feat=None, no_dims=64, per
         torch.cuda.empty_cache()
 
     # Return solution
-    return Y, loss
+    return Y, loss, fuse
 
-def get_window_idx(window_size, jump_size, cur_window_idx):
 
-    return start, end
+def get_parser():
+  parser = argparse.ArgumentParser()
+  parser.add_argument("--data", type=str, default="../data/wiki40b_30k_reps.dat", help="file name of wiki representation stored")
+  #parser.add_argument("--questions", type=str, default="../data/q_20_reps.npy", help="file name of question representation")
+  parser.add_argument("--cuda", type=int, default=1, help="if use cuda accelarate")
+
+  parser.add_argument("--input_dim", type=int, default=128, help="input dimension")
+  parser.add_argument("--output_dim", type=int, default=64, help="output dimension")
+  parser.add_argument("--initial_momentum", type=float, default=0.5, help="initial momentum")
+  parser.add_argument("--initial_iter", type=int, default=20, help="number of beginning interations to apply intial_momentum ")
+  parser.add_argument("--early_exag", type=int, default=100, help="number of beginning interations to apply P value exaggeration ")
+  parser.add_argument("--final_momentum", type=float, default=0.8, help="final momentum")
+  parser.add_argument("--exag_factor", type=float, default=4.0, help="exag factor for P value for first early_exag iterations")
+
+
+  parser.add_argument("--output_path", type=str, default="wiki30k_reduced.dat", help="file name of output path")
+  parser.add_argument("--init_method", type=str, default="pca", help="pca / random initialization of reduced embedding")
+
+  parser.add_argument("--window_size", type=int, default=5000, help="window size for each tsne computation")
+  parser.add_argument("--jump_size", type=int, default=1500, help="(window - overlap size) for each tsne computation")
+  parser.add_argument("--perplexity", type=float, default=30.0, help="perplexity")
+
+
+  parser.add_argument("--n", type=int, default=29727, help="number of data points")
+  return parser.parse_args()
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data", type=str, default="../data/wiki40b_30k_reps.dat", help="file name of wiki representation stored")
-    parser.add_argument("--questions", type=str, default="../data/q_20_reps.npy", help="file name of question representation")
-    parser.add_argument("--cuda", type=int, default=1, help="if use cuda accelarate")
-
-    parser.add_argument("--input_dim", type=int, default=128, help="input dimension")
-    parser.add_argument("--output_dim", type=int, default=64, help="output dimension")
-    parser.add_argument("--initial_momentum", type=float, default=0.5, help="initial momentum")
-    parser.add_argument("--initial_iter", type=int, default=20, help="number of beginning interations to apply intial_momentum ")
-    parser.add_argument("--early_exag", type=int, default=100, help="number of beginning interations to apply P value exaggeration ")
-    parser.add_argument("--final_momentum", type=float, default=0.8, help="final momentum")
-    parser.add_argument("--exag_factor", type=float, default=4.0, help="exag factor for P value for first early_exag iterations")
-
-
-    parser.add_argument("--output_path", type=str, default="wiki30k_reduced.dat", help="file name of output path")
-    parser.add_argument("--init_method", type=str, default="pca", help="pca / random initialization of reduced embedding")
-
-    parser.add_argument("--window_size", type=int, default=5000, help="window size for each tsne computation")
-    parser.add_argument("--jump_size", type=int, default=1500, help="(window - overlap size) for each tsne computation")
-    parser.add_argument("--perplexity", type=float, default=30.0, help="perplexity")
-
-
-    parser.add_argument("--n", type=int, default=29727, help="number of data points")
-    opt = parser.parse_args()
+    
+    opt = get_parser()
     print("get choice from args", opt)
     data = opt.data
     jump_size = opt.jump_size
@@ -234,16 +262,17 @@ if __name__ == "__main__":
 
 
 
-    #X = np.memmap(opt.data, dtype='float32', mode='r', shape=(opt.n, opt.input_dim))
+    X = np.memmap(opt.data, dtype='float32', mode='r', shape=(opt.n, opt.input_dim))
     # @TODO, no sure if this tensor is too large? Probably we need to use CPU first
-    #X = torch.Tensor(X)
-    X = torch.randn([29727, 128])
+    X = torch.Tensor(X)
+    #X = torch.randn([29727, 128])
     with open (opt.questions, "rb") as f:
-        Q = np.load(f)
-    Q = torch.tensor(Q)
-    assert(X.shape[1] == Q.shape[1])
+        ques = np.load(f)
+    ques = torch.tensor(ques).cuda()
+    assert(X.shape[1] == ques.shape[1])
 
 
+    '''
     # for test-use only
     assert(X.shape[0] == opt.n)
     print(X.shape)
@@ -255,14 +284,12 @@ if __name__ == "__main__":
     cur_Y = None
     loss = []
     batch_first_loss = []
-
     with torch.no_grad():
         for batch_idx in tqdm(range(b_s), total=b_s, position=0, leave=True):
             start = batch_idx * jump_size
             end = min(start + window_size, opt.n)
-            print(start, end)
 
-            cur_Y, cur_loss = tsne(X[start:end], window_size=min(window_size, end-start), jump_size=jump_size, prev_feat=cur_Y)
+            cur_Y, cur_loss, fuse = tsne(X[start:end]), ques, len(ques), q_prev_feat = None, q_fuse_prob,  window_size=min(window_size, end-start), jump_size=jump_size, prev_feat=cur_Y, initial_momentum=0.5, final_momentum=0.8, eta=500, min_gain=0.01, tol=1e-5, initial_iter=10, early_exag=50, exag_factor=4)
             batch_first_loss.append(cur_loss[0])
             loss.extend(cur_loss)
             Y[start:end] = cur_Y
@@ -275,4 +302,5 @@ if __name__ == "__main__":
     torch.save(torch.tensor(loss), f"{path}_loss.pt")
     torch.save(torch.tensor(batch_first_loss), f"{path}_batch_first_loss.pt")
     #np.memmap(Y, dtype='float32', mode='r', shape=(opt.n, opt.output))
+    '''
 
